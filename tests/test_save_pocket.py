@@ -120,3 +120,49 @@ def test_fetch_items_handles_missing_since_key():
         
         # Should handle missing 'since' key gracefully
         assert items == []
+
+
+def test_ensure_fts_with_no_items_table():
+    """Test that ensure_fts handles case when items table doesn't exist."""
+    db = sqlite_utils.Database(":memory:")
+    
+    # Call ensure_fts on empty database (no items table)
+    utils.ensure_fts(db)
+    
+    # Should not crash and should not create FTS table
+    assert "items_fts" not in db.table_names()
+    assert "items" not in db.table_names()
+
+
+def test_ensure_fts_with_items_table_creates_fts():
+    """Test that ensure_fts creates FTS when items table exists."""
+    db = sqlite_utils.Database(":memory:")
+    
+    # Create items table first
+    db["items"].insert({"item_id": 1, "resolved_title": "Test", "excerpt": "Test excerpt"})
+    
+    # Call ensure_fts
+    utils.ensure_fts(db)
+    
+    # Should create FTS table
+    assert "items_fts" in db.table_names()
+    assert "items" in db.table_names()
+
+
+def test_ensure_fts_skips_when_fts_already_exists():
+    """Test that ensure_fts skips creation when FTS already exists."""
+    db = sqlite_utils.Database(":memory:")
+    
+    # Create items table and FTS
+    db["items"].insert({"item_id": 1, "resolved_title": "Test", "excerpt": "Test excerpt"})
+    db["items"].enable_fts(["resolved_title", "excerpt"], create_triggers=True)
+    
+    # Track table count before
+    table_count_before = len(db.table_names())
+    
+    # Call ensure_fts
+    utils.ensure_fts(db)
+    
+    # Should not create additional tables
+    assert len(db.table_names()) == table_count_before
+    assert "items_fts" in db.table_names()

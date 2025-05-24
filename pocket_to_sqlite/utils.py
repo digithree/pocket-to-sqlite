@@ -64,7 +64,7 @@ def transform(item):
 
 
 def ensure_fts(db):
-    if "items_fts" not in db.table_names():
+    if "items_fts" not in db.table_names() and "items" in db.table_names():
         db["items"].enable_fts(["resolved_title", "excerpt"], create_triggers=True)
 
 
