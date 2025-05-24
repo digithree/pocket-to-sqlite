@@ -242,12 +242,28 @@ class KarakeepClient:
                     time.sleep(retries * self.retry_sleep)
                     continue
                 
+                # Handle client errors (400-level) without retry
+                if 400 <= response.status_code < 500:
+                    try:
+                        error_data = response.json()
+                        error_msg = error_data.get('message', f'HTTP {response.status_code} error')
+                        error_code = error_data.get('code', 'unknown')
+                        raise Exception(f"Karakeep API error ({error_code}): {error_msg}")
+                    except ValueError:  # JSON decode error
+                        raise Exception(f"Karakeep API error: HTTP {response.status_code} - {response.text}")
+                
                 response.raise_for_status()
                 
                 if self.sleep and retries == 0:  # Only sleep on successful calls, not retries
                     time.sleep(self.sleep)
+                
+                result = response.json()
+                
+                # Log successful creation with bookmark ID
+                if response.status_code == 201 and 'id' in result:
+                    logging.debug(f"Successfully created bookmark with ID: {result['id']}")
                     
-                return response.json()
+                return result
                 
             except (Timeout, RequestException) as e:
                 if retries < 5:

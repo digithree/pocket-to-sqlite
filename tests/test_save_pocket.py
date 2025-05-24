@@ -424,7 +424,27 @@ def test_karakeep_client_create_bookmark():
     }
     
     with patch('pocket_to_sqlite.utils.requests.post') as mock_post:
-        mock_response = Mock(status_code=200, json=lambda: {"id": 123, "status": "created"})
+        # Mock Karakeep 201 success response
+        karakeep_response = {
+            "id": "bookmark_123",
+            "createdAt": "2024-01-01T12:00:00Z",
+            "modifiedAt": "2024-01-01T12:00:00Z",
+            "title": "Test Title",
+            "archived": False,
+            "favourited": False,
+            "taggingStatus": "success",
+            "note": "",
+            "summary": "Test Summary",
+            "tags": [],
+            "content": {
+                "type": "link",
+                "url": "https://example.com",
+                "title": "Test Title",
+                "description": "Test Summary"
+            },
+            "assets": []
+        }
+        mock_response = Mock(status_code=201, json=lambda: karakeep_response)
         mock_post.return_value = mock_response
         
         client = utils.KarakeepClient(auth, sleep=0)
@@ -442,7 +462,8 @@ def test_karakeep_client_create_bookmark():
             "url": "https://example.com"
         }
         assert call_args[1]["headers"]["Authorization"] == "Bearer test-token"
-        assert result == {"id": 123, "status": "created"}
+        assert result == karakeep_response
+        assert result["id"] == "bookmark_123"
 
 
 def test_karakeep_client_retry_on_timeout():
@@ -489,6 +510,30 @@ def test_karakeep_client_retry_on_rate_limit():
                 assert result == {"id": 123}
 
 
+def test_karakeep_client_handles_400_error():
+    """Test KarakeepClient handles 400 errors with proper error format."""
+    auth = {"karakeep_token": "test-token"}
+    
+    with patch('pocket_to_sqlite.utils.requests.post') as mock_post:
+        # Mock Karakeep 400 error response
+        error_response = {
+            "code": "VALIDATION_ERROR",
+            "message": "Title is required and cannot be empty"
+        }
+        mock_response = Mock(status_code=400, json=lambda: error_response)
+        mock_post.return_value = mock_response
+        
+        client = utils.KarakeepClient(auth, sleep=0, retry_sleep=1)
+        
+        try:
+            client.create_bookmark("", "Test Summary", "https://example.com")
+            assert False, "Should have raised an exception"
+        except Exception as e:
+            assert "Karakeep API error (VALIDATION_ERROR): Title is required and cannot be empty" in str(e)
+            # Should not retry 400 errors
+            assert mock_post.call_count == 1
+
+
 def test_export_items_to_karakeep_basic():
     """Test basic export functionality."""
     db = sqlite_utils.Database(":memory:")
@@ -523,7 +568,7 @@ def test_export_items_to_karakeep_basic():
     
     with patch('pocket_to_sqlite.utils.KarakeepClient') as mock_client_class:
         mock_client = Mock()
-        mock_client.create_bookmark.return_value = {"id": 123, "status": "created"}
+        mock_client.create_bookmark.return_value = {"id": "bookmark_123", "title": "Test Article 1"}
         mock_client_class.return_value = mock_client
         
         results = list(utils.export_items_to_karakeep(db, auth, limit=2))
@@ -562,7 +607,7 @@ def test_export_items_to_karakeep_with_filters():
     
     with patch('pocket_to_sqlite.utils.KarakeepClient') as mock_client_class:
         mock_client = Mock()
-        mock_client.create_bookmark.return_value = {"id": 123}
+        mock_client.create_bookmark.return_value = {"id": "bookmark_456"}
         mock_client_class.return_value = mock_client
         
         # Test filter by status=1 (archived)
