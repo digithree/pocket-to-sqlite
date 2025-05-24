@@ -324,6 +324,50 @@ def test_string_author_id_generates_consistent_ids():
     assert author2["name"] == "Sandra E. Garcia"
 
 
+def test_fetch_items_with_start_offset():
+    """Test that FetchItems uses start_offset correctly for incremental fetch."""
+    from unittest.mock import Mock, patch
+    
+    # Mock auth
+    auth = {
+        "pocket_consumer_key": "test_key",
+        "pocket_access_token": "test_token"
+    }
+    
+    # Mock response with items, then empty response to terminate
+    mock_response_with_items = Mock()
+    mock_response_with_items.status_code = 200
+    mock_response_with_items.json.return_value = {
+        "error": None,
+        "list": {"1": {"item_id": "1", "title": "Test"}},
+        "since": 123
+    }
+    mock_response_with_items.raise_for_status.return_value = None
+    
+    mock_response_empty = Mock()
+    mock_response_empty.status_code = 200
+    mock_response_empty.json.return_value = {
+        "error": None,
+        "list": {},
+        "since": 124
+    }
+    mock_response_empty.raise_for_status.return_value = None
+    
+    with patch('requests.post', side_effect=[mock_response_with_items, mock_response_empty]) as mock_post:
+        # Create fetcher with start_offset for incremental fetch
+        fetcher = utils.FetchItems(auth, start_offset=1000, page_size=50)
+        items = list(fetcher)
+        
+        # Should make first request with start_offset as offset
+        assert mock_post.call_count >= 1
+        call_args = mock_post.call_args_list[0]
+        request_data = call_args[1]['data']
+        
+        assert 'offset' in request_data
+        assert request_data['offset'] == 1000
+        assert len(items) == 1
+
+
 def test_ensure_fts_with_no_items_table():
     """Test that ensure_fts handles case when items table doesn't exist."""
     db = sqlite_utils.Database(":memory:")

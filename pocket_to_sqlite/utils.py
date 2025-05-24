@@ -98,19 +98,18 @@ def fetch_stats(auth):
 
 class FetchItems:
     def __init__(
-        self, auth, since=None, page_size=50, sleep=2, retry_sleep=3, record_since=None
+        self, auth, start_offset=0, page_size=50, sleep=2, retry_sleep=3
     ):
         self.auth = auth
-        self.since = since
+        self.start_offset = start_offset
         self.page_size = page_size
         self.sleep = sleep
         self.retry_sleep = retry_sleep
-        self.record_since = record_since
 
     def __iter__(self):
-        offset = 0
+        offset = self.start_offset
         retries = 0
-        logging.debug(f"Starting fetch with since={self.since}, page_size={self.page_size}")
+        logging.debug(f"Starting fetch with start_offset={self.start_offset}, page_size={self.page_size}")
         while True:
             args = {
                 "consumer_key": self.auth["pocket_consumer_key"],
@@ -121,8 +120,6 @@ class FetchItems:
                 "count": self.page_size,
                 "offset": offset,
             }
-            if self.since is not None:
-                args["since"] = self.since
             
             logging.debug(f"Making API request to /v3/get with offset={offset}")
             headers = {"Content-Type": "application/x-www-form-urlencoded; charset=UTF8"}
@@ -161,8 +158,6 @@ class FetchItems:
             
             next_since = page.get("since")
             logging.debug(f"Next since value: {next_since}")
-            if self.record_since and next_since:
-                self.record_since(next_since)
             if not items:
                 logging.debug("No more items found, breaking from loop")
                 break
