@@ -10,8 +10,8 @@ classifiers = [
 ]
 dependencies = [
     "sqlite-utils>=2.4.4",
-    "click",
-    "requests"
+    "click>=8.2.1",
+    "requests>=2.32.3"
 ]
 requires-python = ">3.7"
 scripts = {pocket-to-sqlite = "pocket_to_sqlite.cli:cli"}
