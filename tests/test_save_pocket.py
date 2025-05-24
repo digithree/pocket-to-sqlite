@@ -90,7 +90,7 @@ def test_fetch_items_handles_missing_list_key():
     mock_response.json.return_value = {"since": 1234567890}  # Missing 'list' key
     mock_response.raise_for_status.return_value = None
     
-    with patch('requests.get', return_value=mock_response):
+    with patch('requests.post', return_value=mock_response):
         fetcher = utils.FetchItems(auth, page_size=1)
         items = list(fetcher)
         
@@ -114,12 +114,37 @@ def test_fetch_items_handles_missing_since_key():
     mock_response.json.return_value = {"list": {}}  # Missing 'since' key
     mock_response.raise_for_status.return_value = None
     
-    with patch('requests.get', return_value=mock_response):
+    with patch('requests.post', return_value=mock_response):
         fetcher = utils.FetchItems(auth, page_size=1)
         items = list(fetcher)
         
         # Should handle missing 'since' key gracefully
         assert items == []
+
+
+def test_fetch_items_handles_api_error():
+    """Test that FetchItems handles API error responses properly."""
+    from unittest.mock import Mock, patch
+    import pytest
+    
+    # Mock auth
+    auth = {
+        "pocket_consumer_key": "test_key",
+        "pocket_access_token": "test_token"
+    }
+    
+    # Mock response with error
+    mock_response = Mock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {"error": "Invalid request"}
+    mock_response.raise_for_status.return_value = None
+    
+    with patch('requests.post', return_value=mock_response):
+        fetcher = utils.FetchItems(auth, page_size=1)
+        
+        # Should raise exception with the API error
+        with pytest.raises(Exception, match="Pocket API error: Invalid request"):
+            list(fetcher)
 
 
 def test_ensure_fts_with_no_items_table():

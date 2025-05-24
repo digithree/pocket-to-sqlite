@@ -73,13 +73,12 @@ def ensure_fts(db):
 
 
 def fetch_stats(auth):
-    response = requests.post(
-        "https://getpocket.com/v3/stats",
-        {
-            "consumer_key": auth["pocket_consumer_key"],
-            "access_token": auth["pocket_access_token"],
-        },
-    )
+    headers = {"Content-Type": "application/x-www-form-urlencoded; charset=UTF8"}
+    data = {
+        "consumer_key": auth["pocket_consumer_key"],
+        "access_token": auth["pocket_access_token"],
+    }
+    response = requests.post("https://getpocket.com/v3/stats", data=data, headers=headers)
     response.raise_for_status()
     return response.json()
 
@@ -113,7 +112,8 @@ class FetchItems:
                 args["since"] = self.since
             
             logging.debug(f"Making API request to /v3/get with offset={offset}")
-            response = requests.post("https://getpocket.com/v3/get", args)
+            headers = {"Content-Type": "application/x-www-form-urlencoded; charset=UTF8"}
+            response = requests.post("https://getpocket.com/v3/get", data=args, headers=headers)
             logging.debug(f"API response status: {response.status_code}")
             if response.status_code == 503 and retries < 5:
                 print("Got a 503, retrying...")
@@ -125,6 +125,11 @@ class FetchItems:
             response.raise_for_status()
             page = response.json()
             logging.debug(f"API response keys: {list(page.keys())}")
+            
+            # Check for API errors
+            if "error" in page:
+                logging.error(f"API returned error: {page}")
+                raise Exception(f"Pocket API error: {page.get('error', 'Unknown error')}")
             
             items = list((page.get("list") or {}).values())
             logging.debug(f"Found {len(items)} items in this page")
