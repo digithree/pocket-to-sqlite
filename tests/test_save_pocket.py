@@ -147,6 +147,44 @@ def test_fetch_items_handles_api_error():
             list(fetcher)
 
 
+def test_fetch_items_handles_payload_too_large():
+    """Test that FetchItems handles 413 Payload Too Large errors by reducing page size."""
+    from unittest.mock import Mock, patch
+    
+    # Mock auth
+    auth = {
+        "pocket_consumer_key": "test_key",
+        "pocket_access_token": "test_token"
+    }
+    
+    # Mock response sequence: first 413 error, then success
+    mock_response_error = Mock()
+    mock_response_error.status_code = 200
+    mock_response_error.json.return_value = {"error": "HTTP fetch failed from 'curated-corpus': 413: Payload Too Large"}
+    mock_response_error.raise_for_status.return_value = None
+    
+    mock_response_success = Mock()
+    mock_response_success.status_code = 200
+    mock_response_success.json.return_value = {"list": {"1": {"item_id": "1", "title": "Test"}}, "since": 123}
+    mock_response_success.raise_for_status.return_value = None
+    
+    # Mock empty response to end iteration
+    mock_response_empty = Mock()
+    mock_response_empty.status_code = 200
+    mock_response_empty.json.return_value = {"list": {}, "since": 124}
+    mock_response_empty.raise_for_status.return_value = None
+    
+    with patch('requests.post', side_effect=[mock_response_error, mock_response_success, mock_response_empty]):
+        fetcher = utils.FetchItems(auth, page_size=100)
+        items = list(fetcher)
+        
+        # Should successfully fetch items after reducing page size
+        assert len(items) == 1
+        assert items[0]["item_id"] == "1"
+        # Page size should have been reduced
+        assert fetcher.page_size == 50  # 100 // 2
+
+
 def test_ensure_fts_with_no_items_table():
     """Test that ensure_fts handles case when items table doesn't exist."""
     db = sqlite_utils.Database(":memory:")

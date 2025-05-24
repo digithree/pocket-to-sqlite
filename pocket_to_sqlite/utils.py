@@ -85,7 +85,7 @@ def fetch_stats(auth):
 
 class FetchItems:
     def __init__(
-        self, auth, since=None, page_size=500, sleep=2, retry_sleep=3, record_since=None
+        self, auth, since=None, page_size=50, sleep=2, retry_sleep=3, record_since=None
     ):
         self.auth = auth
         self.since = since
@@ -128,8 +128,20 @@ class FetchItems:
             
             # Check for API errors
             if "error" in page:
+                error_msg = page.get('error', 'Unknown error')
                 logging.error(f"API returned error: {page}")
-                raise Exception(f"Pocket API error: {page.get('error', 'Unknown error')}")
+                
+                # Handle payload too large by reducing page size
+                if "413" in str(error_msg) or "Payload Too Large" in str(error_msg):
+                    if self.page_size > 10:
+                        new_page_size = max(10, self.page_size // 2)
+                        logging.warning(f"Payload too large, reducing page size from {self.page_size} to {new_page_size}")
+                        self.page_size = new_page_size
+                        continue  # Retry with smaller page size
+                    else:
+                        raise Exception(f"Pocket API error: Even minimum page size (10) is too large: {error_msg}")
+                
+                raise Exception(f"Pocket API error: {error_msg}")
             
             items = list((page.get("list") or {}).values())
             logging.debug(f"Found {len(items)} items in this page")
