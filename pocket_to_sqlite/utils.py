@@ -126,9 +126,9 @@ class FetchItems:
             page = response.json()
             logging.debug(f"API response keys: {list(page.keys())}")
             
-            # Check for API errors
-            if "error" in page:
-                error_msg = page.get('error', 'Unknown error')
+            # Check for API errors (error key present AND has a non-None value)
+            error_msg = page.get('error')
+            if error_msg is not None:
                 logging.error(f"API returned error: {page}")
                 
                 # Handle payload too large by reducing page size
