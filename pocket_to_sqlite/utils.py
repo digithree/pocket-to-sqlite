@@ -116,8 +116,8 @@ class FetchItems:
                 retries = 0
             response.raise_for_status()
             page = response.json()
-            items = list((page["list"] or {}).values())
-            next_since = page["since"]
+            items = list((page.get("list") or {}).values())
+            next_since = page.get("since")
             if self.record_since and next_since:
                 self.record_since(next_since)
             if not items:

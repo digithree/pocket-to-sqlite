@@ -72,3 +72,51 @@ def test_authors(converted):
             "url": "http://people.idsia.ch/~juergen/heatexchanger/heatexchanger.html",
         }
     ] == authors
+
+
+def test_fetch_items_handles_missing_list_key():
+    """Test that FetchItems handles API responses missing the 'list' key gracefully."""
+    from unittest.mock import Mock, patch
+    
+    # Mock auth
+    auth = {
+        "pocket_consumer_key": "test_key",
+        "pocket_access_token": "test_token"
+    }
+    
+    # Mock response without 'list' key
+    mock_response = Mock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {"since": 1234567890}  # Missing 'list' key
+    mock_response.raise_for_status.return_value = None
+    
+    with patch('requests.get', return_value=mock_response):
+        fetcher = utils.FetchItems(auth, page_size=1)
+        items = list(fetcher)
+        
+        # Should return empty list instead of raising KeyError
+        assert items == []
+
+
+def test_fetch_items_handles_missing_since_key():
+    """Test that FetchItems handles API responses missing the 'since' key gracefully."""
+    from unittest.mock import Mock, patch
+    
+    # Mock auth
+    auth = {
+        "pocket_consumer_key": "test_key",
+        "pocket_access_token": "test_token"
+    }
+    
+    # Mock response without 'since' key
+    mock_response = Mock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {"list": {}}  # Missing 'since' key
+    mock_response.raise_for_status.return_value = None
+    
+    with patch('requests.get', return_value=mock_response):
+        fetcher = utils.FetchItems(auth, page_size=1)
+        items = list(fetcher)
+        
+        # Should handle missing 'since' key gracefully
+        assert items == []
