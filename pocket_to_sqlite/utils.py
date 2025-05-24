@@ -69,7 +69,7 @@ def ensure_fts(db):
 
 
 def fetch_stats(auth):
-    response = requests.get(
+    response = requests.post(
         "https://getpocket.com/v3/stats",
         {
             "consumer_key": auth["pocket_consumer_key"],
@@ -106,7 +106,7 @@ class FetchItems:
             }
             if self.since is not None:
                 args["since"] = self.since
-            response = requests.get("https://getpocket.com/v3/get", args)
+            response = requests.post("https://getpocket.com/v3/get", args)
             if response.status_code == 503 and retries < 5:
                 print("Got a 503, retrying...")
                 retries += 1
