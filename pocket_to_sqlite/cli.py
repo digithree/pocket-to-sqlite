@@ -81,26 +81,31 @@ def auth(auth):
 )
 @click.option("--all", is_flag=True, help="Fetch all items (not just new ones)")
 @click.option("-s", "--silent", is_flag=True, help="Don't show progress bar")
-def fetch(db_path, auth, all, silent):
+@click.option("--debug", is_flag=True, help="Enable debug logging")
+def fetch(db_path, auth, all, silent, debug):
     "Save Pocket data to a SQLite database"
+    if debug:
+        import logging
+        logging.basicConfig(level=logging.DEBUG, format='%(levelname)s: %(message)s')
+        print("Debug logging enabled")
+    
     auth = json.load(open(auth))
     db = sqlite_utils.Database(db_path)
-    last_since = None
-    if not all and db["since"].exists():
-        last_since = db["since"].get(1)["since"]
-    fetch = utils.FetchItems(
-        auth,
-        since=last_since,
-        record_since=lambda since: db["since"].insert(
-            {"id": 1, "since": since}, replace=True, pk="id"
-        ),
-    )
-    if (all or last_since is None) and not silent:
+    
+    # For incremental fetch, start from the number of items already in DB
+    start_offset = 0
+    if not all and "items" in db.table_names():
+        start_offset = db["items"].count
+        if debug:
+            print(f"Found {start_offset} existing items, starting from offset {start_offset}")
+    
+    fetch = utils.FetchItems(auth, start_offset=start_offset)
+    if (all or start_offset == 0) and not silent:
         total_items = utils.fetch_stats(auth)["count_list"]
         with click.progressbar(fetch, length=total_items, show_pos=True) as bar:
             utils.save_items(bar, db)
     else:
         # No progress bar
-        print("Fetching items since {}".format(last_since))
+        print("Fetching items from offset {}".format(start_offset))
         utils.save_items(fetch, db)
     utils.ensure_fts(db)
