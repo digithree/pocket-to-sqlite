@@ -2,11 +2,15 @@ import datetime
 import requests
 import json
 import time
+import logging
 from sqlite_utils.db import AlterError, ForeignKey
 
 
 def save_items(items, db):
+    count = 0
     for item in items:
+        count += 1
+        logging.debug(f"Processing item {count}: {item.get('item_id', 'unknown')}")
         transform(item)
         authors = item.pop("authors", None)
         items_authors_to_save = []
@@ -94,6 +98,7 @@ class FetchItems:
     def __iter__(self):
         offset = 0
         retries = 0
+        logging.debug(f"Starting fetch with since={self.since}, page_size={self.page_size}")
         while True:
             args = {
                 "consumer_key": self.auth["pocket_consumer_key"],
@@ -106,7 +111,10 @@ class FetchItems:
             }
             if self.since is not None:
                 args["since"] = self.since
+            
+            logging.debug(f"Making API request to /v3/get with offset={offset}")
             response = requests.post("https://getpocket.com/v3/get", args)
+            logging.debug(f"API response status: {response.status_code}")
             if response.status_code == 503 and retries < 5:
                 print("Got a 503, retrying...")
                 retries += 1
@@ -116,13 +124,21 @@ class FetchItems:
                 retries = 0
             response.raise_for_status()
             page = response.json()
+            logging.debug(f"API response keys: {list(page.keys())}")
+            
             items = list((page.get("list") or {}).values())
+            logging.debug(f"Found {len(items)} items in this page")
+            
             next_since = page.get("since")
+            logging.debug(f"Next since value: {next_since}")
             if self.record_since and next_since:
                 self.record_since(next_since)
             if not items:
+                logging.debug("No more items found, breaking from loop")
                 break
+            logging.debug(f"Yielding {len(items)} items")
             yield from items
             offset += self.page_size
+            logging.debug(f"Updated offset to {offset}")
             if self.sleep:
                 time.sleep(self.sleep)

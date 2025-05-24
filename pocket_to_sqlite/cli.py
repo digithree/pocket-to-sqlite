@@ -81,8 +81,14 @@ def auth(auth):
 )
 @click.option("--all", is_flag=True, help="Fetch all items (not just new ones)")
 @click.option("-s", "--silent", is_flag=True, help="Don't show progress bar")
-def fetch(db_path, auth, all, silent):
+@click.option("--debug", is_flag=True, help="Enable debug logging")
+def fetch(db_path, auth, all, silent, debug):
     "Save Pocket data to a SQLite database"
+    if debug:
+        import logging
+        logging.basicConfig(level=logging.DEBUG, format='%(levelname)s: %(message)s')
+        print("Debug logging enabled")
+    
     auth = json.load(open(auth))
     db = sqlite_utils.Database(db_path)
     last_since = None
