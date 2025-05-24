@@ -3,6 +3,7 @@ import requests
 import json
 import time
 import logging
+import hashlib
 from sqlite_utils.db import AlterError, ForeignKey
 
 
@@ -17,16 +18,28 @@ def save_items(items, db):
         if authors:
             authors_to_save = []
             for details in authors.values():
+                # Handle both numeric and string author_ids
+                author_id_raw = details["author_id"]
+                try:
+                    # Try to use as integer (normal case)
+                    author_id = int(author_id_raw)
+                    author_name = details["name"]
+                except ValueError:
+                    # String author_id - treat it as the name and generate unique ID
+                    author_name = author_id_raw
+                    # Generate deterministic integer ID from the string
+                    author_id = int(hashlib.md5(author_id_raw.encode()).hexdigest()[:8], 16)
+                
                 authors_to_save.append(
                     {
-                        "author_id": int(details["author_id"]),
-                        "name": details["name"],
+                        "author_id": author_id,
+                        "name": author_name,
                         "url": details["url"],
                     }
                 )
                 items_authors_to_save.append(
                     {
-                        "author_id": int(details["author_id"]),
+                        "author_id": author_id,
                         "item_id": int(details["item_id"]),
                     }
                 )

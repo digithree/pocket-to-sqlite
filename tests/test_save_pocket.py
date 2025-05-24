@@ -220,6 +220,110 @@ def test_fetch_items_handles_error_none_success():
         assert items[0]["item_id"] == "1"
 
 
+def test_save_items_handles_string_author_ids():
+    """Test that save_items handles string author IDs by treating them as names."""
+    db = sqlite_utils.Database(":memory:")
+    
+    # Create item with string author_id (alternative schema)
+    item_with_string_author = {
+        "item_id": "123",
+        "title": "Test Item",
+        "authors": {
+            "1": {
+                "author_id": "Sandra E. Garcia",  # String ID - treat as name
+                "name": "Original Name",  # This should be ignored
+                "url": "http://example.com",
+                "item_id": "123"
+            }
+        }
+    }
+    
+    utils.save_items([item_with_string_author], db)
+    
+    # Should save item and author with generated numeric ID
+    assert db["items"].count == 1
+    assert db["authors"].count == 1
+    
+    author = list(db["authors"].rows)[0]
+    # Should have numeric author_id and string as name
+    assert isinstance(author["author_id"], int)
+    assert author["name"] == "Sandra E. Garcia"
+    assert author["url"] == "http://example.com"
+
+
+def test_save_items_handles_mixed_author_id_types():
+    """Test that save_items handles mix of numeric and string author IDs."""
+    db = sqlite_utils.Database(":memory:")
+    
+    # Create item with both types of author IDs
+    item_with_mixed_authors = {
+        "item_id": "123", 
+        "title": "Test Item",
+        "authors": {
+            "1": {
+                "author_id": "456",  # Numeric string
+                "name": "John Doe",
+                "url": "http://example.com",
+                "item_id": "123"
+            },
+            "2": {
+                "author_id": "Jane Smith",  # String ID
+                "name": "Original Name",
+                "url": "http://example2.com",
+                "item_id": "123" 
+            }
+        }
+    }
+    
+    utils.save_items([item_with_mixed_authors], db)
+    
+    # Should save item and both authors
+    assert db["items"].count == 1
+    assert db["authors"].count == 2
+    
+    authors = {row["name"]: row for row in db["authors"].rows}
+    
+    # Numeric author ID should be preserved
+    assert authors["John Doe"]["author_id"] == 456
+    
+    # String author ID should become the name with generated numeric ID
+    assert "Jane Smith" in authors
+    assert isinstance(authors["Jane Smith"]["author_id"], int)
+    assert authors["Jane Smith"]["author_id"] != 456  # Different from the other
+
+
+def test_string_author_id_generates_consistent_ids():
+    """Test that same string author ID generates consistent numeric IDs."""
+    import copy
+    
+    db1 = sqlite_utils.Database(":memory:")
+    db2 = sqlite_utils.Database(":memory:")
+    
+    item_template = {
+        "item_id": "123",
+        "title": "Test Item", 
+        "authors": {
+            "1": {
+                "author_id": "Sandra E. Garcia",
+                "name": "Original Name",
+                "url": "http://example.com",
+                "item_id": "123"
+            }
+        }
+    }
+    
+    # Save same item to two different databases (deep copy to avoid mutation)
+    utils.save_items([copy.deepcopy(item_template)], db1)
+    utils.save_items([copy.deepcopy(item_template)], db2)
+    
+    # Should generate same author_id for same string
+    author1 = list(db1["authors"].rows)[0]
+    author2 = list(db2["authors"].rows)[0]
+    assert author1["author_id"] == author2["author_id"]
+    assert author1["name"] == "Sandra E. Garcia"
+    assert author2["name"] == "Sandra E. Garcia"
+
+
 def test_ensure_fts_with_no_items_table():
     """Test that ensure_fts handles case when items table doesn't exist."""
     db = sqlite_utils.Database(":memory:")
