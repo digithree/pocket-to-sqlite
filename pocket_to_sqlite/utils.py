@@ -5,6 +5,7 @@ import time
 import logging
 import hashlib
 from sqlite_utils.db import AlterError, ForeignKey
+from requests.exceptions import RequestException, Timeout, HTTPError
 
 
 def save_items(items, db):
@@ -167,3 +168,274 @@ class FetchItems:
             logging.debug(f"Updated offset to {offset}")
             if self.sleep:
                 time.sleep(self.sleep)
+
+
+class KarakeepClient:
+    """Client for exporting bookmarks to Karakeep via REST API."""
+    
+    def __init__(self, auth, sleep=1, retry_sleep=3):
+        """
+        Initialize Karakeep client.
+        
+        Args:
+            auth: Dict containing karakeep_token and karakeep_base_url
+            sleep: Seconds to sleep between API calls
+            retry_sleep: Base seconds for retry backoff
+        """
+        self.auth = auth
+        self.sleep = sleep
+        self.retry_sleep = retry_sleep
+        self.base_url = auth.get("karakeep_base_url", "https://localhost:3000")
+        self.token = auth["karakeep_token"]
+        
+    def create_bookmark(self, title, summary, url):
+        """
+        Create a bookmark in Karakeep.
+        
+        Args:
+            title: Bookmark title
+            summary: Bookmark summary/description
+            url: Bookmark URL
+            
+        Returns:
+            Response data from Karakeep API
+            
+        Raises:
+            Exception: If API call fails after retries
+        """
+        payload = {
+            "title": title,
+            "summary": summary,
+            "type": "link",
+            "url": url,
+        }
+        
+        headers = {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+            'Authorization': f'Bearer {self.token}'
+        }
+        
+        retries = 0
+        while retries < 5:
+            try:
+                logging.debug(f"Creating bookmark: {title[:50]}...")
+                response = requests.post(
+                    f"{self.base_url}/api/v1/bookmarks",
+                    json=payload,
+                    headers=headers,
+                    timeout=30
+                )
+                
+                logging.debug(f"Karakeep API response status: {response.status_code}")
+                
+                # Handle rate limiting and server errors with retry
+                if response.status_code in [429, 503, 504] and retries < 5:
+                    error_type = {
+                        429: "rate limited",
+                        503: "service unavailable", 
+                        504: "gateway timeout"
+                    }.get(response.status_code, "server error")
+                    
+                    logging.info(f"Got {response.status_code} ({error_type}), retrying in {retries + 1}s...")
+                    retries += 1
+                    time.sleep(retries * self.retry_sleep)
+                    continue
+                
+                # Handle client errors (400-level) without retry
+                if 400 <= response.status_code < 500:
+                    try:
+                        error_data = response.json()
+                        error_msg = error_data.get('message', f'HTTP {response.status_code} error')
+                        error_code = error_data.get('code', 'unknown')
+                        raise Exception(f"Karakeep API error ({error_code}): {error_msg}")
+                    except ValueError:  # JSON decode error
+                        raise Exception(f"Karakeep API error: HTTP {response.status_code} - {response.text}")
+                
+                response.raise_for_status()
+                
+                if self.sleep and retries == 0:  # Only sleep on successful calls, not retries
+                    time.sleep(self.sleep)
+                
+                result = response.json()
+                
+                # Log successful creation with bookmark ID
+                if response.status_code == 201 and 'id' in result:
+                    logging.debug(f"Successfully created bookmark with ID: {result['id']}")
+                    
+                return result
+                
+            except (Timeout, RequestException) as e:
+                if retries < 5:
+                    logging.info(f"Request timeout/error, retrying in {retries + 1}s...")
+                    retries += 1
+                    time.sleep(retries * self.retry_sleep)
+                    continue
+                else:
+                    raise Exception(f"Karakeep API request failed after 5 retries: {e}")
+        
+        raise Exception(f"Karakeep API request failed after 5 retries")
+
+
+def export_items_to_karakeep(db, auth, limit=None, offset=0, filter_status=None, filter_favorite=False):
+    """
+    Export items from SQLite database to Karakeep.
+    
+    Args:
+        db: sqlite_utils.Database instance
+        auth: Auth dict with Karakeep credentials
+        limit: Maximum number of items to export (None for all)
+        offset: Number of items to skip
+        filter_status: Only export items with this status (0=unread, 1=archived, 2=deleted)
+        filter_favorite: Only export favorited items if True
+        
+    Yields:
+        Dict for each item with export result
+    """
+    client = KarakeepClient(auth)
+    
+    # Build query conditions
+    conditions = []
+    params = []
+    
+    if filter_status is not None:
+        conditions.append("status = ?")
+        params.append(filter_status)
+        
+    if filter_favorite:
+        conditions.append("favorite = 1")
+    
+    where_clause = " WHERE " + " AND ".join(conditions) if conditions else ""
+    
+    # Build SQL query
+    sql = f"""
+        SELECT item_id, resolved_title, given_title, resolved_url, given_url, excerpt
+        FROM items
+        {where_clause}
+        ORDER BY item_id
+        LIMIT ? OFFSET ?
+    """
+    
+    # Add limit and offset to params
+    final_limit = limit if limit is not None else -1  # SQLite uses -1 for no limit
+    params.extend([final_limit, offset])
+    
+    logging.debug(f"Export query: {sql}")
+    logging.debug(f"Export params: {params}")
+    
+    count = 0
+    success_count = 0
+    
+    for row in db.execute(sql, params):
+        count += 1
+        
+        # Convert row to dict for easier access
+        row_dict = dict(row) if hasattr(row, 'keys') else dict(zip([
+            'item_id', 'resolved_title', 'given_title', 'resolved_url', 'given_url', 'excerpt'
+        ], row))
+        
+        # Map Pocket item to Karakeep bookmark
+        title = row_dict["resolved_title"] or row_dict["given_title"] or "Untitled"
+        url = row_dict["resolved_url"] or row_dict["given_url"]
+        summary = row_dict["excerpt"] or ""
+        
+        # Skip items without URLs
+        if not url:
+            logging.warning(f"Skipping item {row_dict['item_id']} - no URL found")
+            yield {
+                "item_id": row_dict["item_id"],
+                "status": "skipped",
+                "reason": "no_url"
+            }
+            continue
+        
+        try:
+            result = client.create_bookmark(title, summary, url)
+            success_count += 1
+            logging.debug(f"Successfully exported item {row_dict['item_id']}")
+            
+            yield {
+                "item_id": row_dict["item_id"],
+                "status": "success",
+                "title": title,
+                "url": url,
+                "karakeep_response": result
+            }
+            
+        except Exception as e:
+            logging.error(f"Failed to export item {row_dict['item_id']}: {e}")
+            yield {
+                "item_id": row_dict["item_id"],
+                "status": "error",
+                "title": title,
+                "url": url,
+                "error": str(e)
+            }
+    
+    logging.info(f"Export completed: {success_count}/{count} items successfully exported")
+
+
+def preview_export_items(db, limit=None, offset=0, filter_status=None, filter_favorite=False):
+    """
+    Preview items that would be exported to Karakeep (dry-run mode).
+    
+    Args:
+        db: sqlite_utils.Database instance
+        limit: Maximum number of items to preview (None for all)
+        offset: Number of items to skip
+        filter_status: Only preview items with this status (0=unread, 1=archived, 2=deleted)
+        filter_favorite: Only preview favorited items if True
+        
+    Yields:
+        Dict for each item that would be exported
+    """
+    # Build query conditions
+    conditions = []
+    params = []
+    
+    if filter_status is not None:
+        conditions.append("status = ?")
+        params.append(filter_status)
+        
+    if filter_favorite:
+        conditions.append("favorite = 1")
+    
+    where_clause = " WHERE " + " AND ".join(conditions) if conditions else ""
+    
+    # Build SQL query
+    sql = f"""
+        SELECT item_id, resolved_title, given_title, resolved_url, given_url, excerpt
+        FROM items
+        {where_clause}
+        ORDER BY item_id
+        LIMIT ? OFFSET ?
+    """
+    
+    # Add limit and offset to params
+    final_limit = limit if limit is not None else -1  # SQLite uses -1 for no limit
+    params.extend([final_limit, offset])
+    
+    for row in db.execute(sql, params):
+        # Convert row to dict for easier access
+        row_dict = dict(row) if hasattr(row, 'keys') else dict(zip([
+            'item_id', 'resolved_title', 'given_title', 'resolved_url', 'given_url', 'excerpt'
+        ], row))
+        
+        # Map Pocket item to Karakeep bookmark
+        title = row_dict["resolved_title"] or row_dict["given_title"] or "Untitled"
+        url = row_dict["resolved_url"] or row_dict["given_url"]
+        
+        # Skip items without URLs
+        if not url:
+            yield {
+                "item_id": row_dict["item_id"],
+                "status": "skipped", 
+                "reason": "no_url"
+            }
+        else:
+            yield {
+                "item_id": row_dict["item_id"],
+                "status": "preview",
+                "title": title,
+                "url": url
+            }

@@ -4,6 +4,7 @@ import json
 import sqlite_utils
 from sqlite_utils.db import ForeignKey
 import pathlib
+from unittest.mock import patch, Mock
 
 
 def load():
@@ -412,3 +413,273 @@ def test_ensure_fts_skips_when_fts_already_exists():
     # Should not create additional tables
     assert len(db.table_names()) == table_count_before
     assert "items_fts" in db.table_names()
+
+
+def test_karakeep_client_create_bookmark():
+    """Test KarakeepClient.create_bookmark with successful response."""
+    
+    auth = {
+        "karakeep_token": "test-token",
+        "karakeep_base_url": "https://test.karakeep.com"
+    }
+    
+    with patch('pocket_to_sqlite.utils.requests.post') as mock_post:
+        # Mock Karakeep 201 success response
+        karakeep_response = {
+            "id": "bookmark_123",
+            "createdAt": "2024-01-01T12:00:00Z",
+            "modifiedAt": "2024-01-01T12:00:00Z",
+            "title": "Test Title",
+            "archived": False,
+            "favourited": False,
+            "taggingStatus": "success",
+            "note": "",
+            "summary": "Test Summary",
+            "tags": [],
+            "content": {
+                "type": "link",
+                "url": "https://example.com",
+                "title": "Test Title",
+                "description": "Test Summary"
+            },
+            "assets": []
+        }
+        mock_response = Mock(status_code=201, json=lambda: karakeep_response)
+        mock_post.return_value = mock_response
+        
+        client = utils.KarakeepClient(auth, sleep=0)
+        result = client.create_bookmark("Test Title", "Test Summary", "https://example.com")
+        
+        # Verify API call
+        mock_post.assert_called_once()
+        call_args = mock_post.call_args
+        
+        assert call_args[0][0] == "https://test.karakeep.com/api/v1/bookmarks"
+        assert call_args[1]["json"] == {
+            "title": "Test Title",
+            "summary": "Test Summary", 
+            "type": "link",
+            "url": "https://example.com"
+        }
+        assert call_args[1]["headers"]["Authorization"] == "Bearer test-token"
+        assert result == karakeep_response
+        assert result["id"] == "bookmark_123"
+
+
+def test_karakeep_client_retry_on_timeout():
+    """Test KarakeepClient retries on timeout errors."""
+    from requests.exceptions import Timeout
+    
+    auth = {"karakeep_token": "test-token"}
+    
+    with patch('pocket_to_sqlite.utils.requests.post') as mock_post:
+        # First call times out, second succeeds
+        mock_post.side_effect = [
+            Timeout("Request timed out"),
+            Mock(status_code=200, json=lambda: {"id": 123})
+        ]
+        
+        with patch('pocket_to_sqlite.utils.time.sleep'):
+            with patch('pocket_to_sqlite.utils.logging.info') as mock_log:
+                client = utils.KarakeepClient(auth, sleep=0, retry_sleep=1)
+                result = client.create_bookmark("Test", "Summary", "https://example.com")
+                
+                assert mock_post.call_count == 2
+                mock_log.assert_called_once_with("Request timeout/error, retrying in 1s...")
+                assert result == {"id": 123}
+
+
+def test_karakeep_client_retry_on_rate_limit():
+    """Test KarakeepClient retries on 429 rate limit."""
+    
+    auth = {"karakeep_token": "test-token"}
+    
+    with patch('pocket_to_sqlite.utils.requests.post') as mock_post:
+        # First call rate limited, second succeeds
+        mock_response_429 = Mock(status_code=429)
+        mock_response_200 = Mock(status_code=200, json=lambda: {"id": 123})
+        mock_post.side_effect = [mock_response_429, mock_response_200]
+        
+        with patch('pocket_to_sqlite.utils.time.sleep'):
+            with patch('pocket_to_sqlite.utils.logging.info') as mock_log:
+                client = utils.KarakeepClient(auth, sleep=0, retry_sleep=1)
+                result = client.create_bookmark("Test", "Summary", "https://example.com")
+                
+                assert mock_post.call_count == 2
+                mock_log.assert_called_once_with("Got 429 (rate limited), retrying in 1s...")
+                assert result == {"id": 123}
+
+
+def test_karakeep_client_handles_400_error():
+    """Test KarakeepClient handles 400 errors with proper error format."""
+    auth = {"karakeep_token": "test-token"}
+    
+    with patch('pocket_to_sqlite.utils.requests.post') as mock_post:
+        # Mock Karakeep 400 error response
+        error_response = {
+            "code": "VALIDATION_ERROR",
+            "message": "Title is required and cannot be empty"
+        }
+        mock_response = Mock(status_code=400, json=lambda: error_response)
+        mock_post.return_value = mock_response
+        
+        client = utils.KarakeepClient(auth, sleep=0, retry_sleep=1)
+        
+        try:
+            client.create_bookmark("", "Test Summary", "https://example.com")
+            assert False, "Should have raised an exception"
+        except Exception as e:
+            assert "Karakeep API error (VALIDATION_ERROR): Title is required and cannot be empty" in str(e)
+            # Should not retry 400 errors
+            assert mock_post.call_count == 1
+
+
+def test_export_items_to_karakeep_basic():
+    """Test basic export functionality."""
+    db = sqlite_utils.Database(":memory:")
+    
+    # Insert test data
+    test_items = [
+        {
+            "item_id": 1,
+            "resolved_title": "Test Article 1",
+            "given_title": "Given Title 1", 
+            "resolved_url": "https://example.com/1",
+            "given_url": "https://given.com/1",
+            "excerpt": "This is a test excerpt",
+            "status": 0,
+            "favorite": 0
+        },
+        {
+            "item_id": 2,
+            "resolved_title": "Test Article 2",
+            "given_title": None,
+            "resolved_url": "https://example.com/2", 
+            "given_url": None,
+            "excerpt": "",
+            "status": 1,
+            "favorite": 1
+        }
+    ]
+    
+    db["items"].insert_all(test_items)
+    
+    auth = {"karakeep_token": "test-token"}
+    
+    with patch('pocket_to_sqlite.utils.KarakeepClient') as mock_client_class:
+        mock_client = Mock()
+        mock_client.create_bookmark.return_value = {"id": "bookmark_123", "title": "Test Article 1"}
+        mock_client_class.return_value = mock_client
+        
+        results = list(utils.export_items_to_karakeep(db, auth, limit=2))
+        
+        assert len(results) == 2
+        assert all(r["status"] == "success" for r in results)
+        assert results[0]["item_id"] == 1
+        assert results[0]["title"] == "Test Article 1"
+        assert results[0]["url"] == "https://example.com/1"
+        
+        # Verify KarakeepClient was called correctly
+        assert mock_client.create_bookmark.call_count == 2
+        call_args = mock_client.create_bookmark.call_args_list
+        
+        # First item
+        assert call_args[0][0] == ("Test Article 1", "This is a test excerpt", "https://example.com/1")
+        # Second item
+        assert call_args[1][0] == ("Test Article 2", "", "https://example.com/2")
+
+
+def test_export_items_to_karakeep_with_filters():
+    """Test export with status and favorite filters."""
+    db = sqlite_utils.Database(":memory:")
+    
+    # Insert test data with different statuses and favorites
+    test_items = [
+        {"item_id": 1, "resolved_title": "Unread", "given_title": None, "resolved_url": "https://example.com/1", "given_url": None, "excerpt": "", "status": 0, "favorite": 0},
+        {"item_id": 2, "resolved_title": "Archived", "given_title": None, "resolved_url": "https://example.com/2", "given_url": None, "excerpt": "", "status": 1, "favorite": 0},
+        {"item_id": 3, "resolved_title": "Favorite", "given_title": None, "resolved_url": "https://example.com/3", "given_url": None, "excerpt": "", "status": 0, "favorite": 1},
+        {"item_id": 4, "resolved_title": "Archived Favorite", "given_title": None, "resolved_url": "https://example.com/4", "given_url": None, "excerpt": "", "status": 1, "favorite": 1},
+    ]
+    
+    db["items"].insert_all(test_items)
+    
+    auth = {"karakeep_token": "test-token"}
+    
+    with patch('pocket_to_sqlite.utils.KarakeepClient') as mock_client_class:
+        mock_client = Mock()
+        mock_client.create_bookmark.return_value = {"id": "bookmark_456"}
+        mock_client_class.return_value = mock_client
+        
+        # Test filter by status=1 (archived)
+        results = list(utils.export_items_to_karakeep(db, auth, filter_status=1))
+        assert len(results) == 2
+        assert {r["item_id"] for r in results} == {2, 4}
+        
+        # Test filter by favorites only
+        results = list(utils.export_items_to_karakeep(db, auth, filter_favorite=True))
+        assert len(results) == 2
+        assert {r["item_id"] for r in results} == {3, 4}
+        
+        # Test combined filters (archived favorites)
+        results = list(utils.export_items_to_karakeep(db, auth, filter_status=1, filter_favorite=True))
+        assert len(results) == 1
+        assert results[0]["item_id"] == 4
+
+
+def test_export_items_to_karakeep_skip_no_url():
+    """Test that items without URLs are skipped."""
+    db = sqlite_utils.Database(":memory:")
+    
+    # Insert item without URL
+    db["items"].insert({
+        "item_id": 1,
+        "resolved_title": "No URL Item",
+        "given_title": None,
+        "resolved_url": None,
+        "given_url": None,
+        "excerpt": "No URL available"
+    })
+    
+    auth = {"karakeep_token": "test-token"}
+    
+    with patch('pocket_to_sqlite.utils.KarakeepClient') as mock_client_class:
+        mock_client = Mock()
+        mock_client_class.return_value = mock_client
+        
+        results = list(utils.export_items_to_karakeep(db, auth))
+        
+        assert len(results) == 1
+        assert results[0]["status"] == "skipped"
+        assert results[0]["reason"] == "no_url"
+        assert results[0]["item_id"] == 1
+        
+        # Should not have called create_bookmark
+        mock_client.create_bookmark.assert_not_called()
+
+
+def test_export_items_to_karakeep_handle_errors():
+    """Test error handling during export."""
+    db = sqlite_utils.Database(":memory:")
+    
+    db["items"].insert({
+        "item_id": 1,
+        "resolved_title": "Test Article",
+        "given_title": None,
+        "resolved_url": "https://example.com",
+        "given_url": None,
+        "excerpt": "Test"
+    })
+    
+    auth = {"karakeep_token": "test-token"}
+    
+    with patch('pocket_to_sqlite.utils.KarakeepClient') as mock_client_class:
+        mock_client = Mock()
+        mock_client.create_bookmark.side_effect = Exception("API Error")
+        mock_client_class.return_value = mock_client
+        
+        results = list(utils.export_items_to_karakeep(db, auth))
+        
+        assert len(results) == 1
+        assert results[0]["status"] == "error"
+        assert results[0]["item_id"] == 1
+        assert "API Error" in results[0]["error"]
