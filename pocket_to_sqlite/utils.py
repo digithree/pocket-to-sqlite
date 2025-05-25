@@ -500,17 +500,21 @@ def export_items_to_karakeep(db, auth, limit=None, offset=0, filter_status=None,
             tags_data = row_dict.get("tags")
             
             if bookmark_id and tags_data:
-                # Parse tags - could be JSON object or comma-separated string
+                # Parse tags from Pocket format: {"programming": {"tag": "programming", "item_id": "131375573"}, ...}
                 tag_names = []
                 try:
                     if tags_data.startswith('{'):
-                        # JSON format: {"tag1": {"tag": "tag1"}, "tag2": {"tag": "tag2"}}
+                        # JSON format from Pocket API
                         tags_obj = json.loads(tags_data)
-                        tag_names = list(tags_obj.keys())
+                        # Extract tag names from the nested structure
+                        tag_names = [tag_info.get("tag", tag_key) for tag_key, tag_info in tags_obj.items() if isinstance(tag_info, dict)]
+                        # Fallback to keys if tag field not found
+                        if not tag_names:
+                            tag_names = list(tags_obj.keys())
                     else:
-                        # Comma-separated format
+                        # Comma-separated format (fallback)
                         tag_names = [tag.strip() for tag in tags_data.split(",") if tag.strip()]
-                except (json.JSONDecodeError, AttributeError):
+                except (json.JSONDecodeError, AttributeError, TypeError):
                     # Fallback to comma-separated
                     tag_names = [tag.strip() for tag in str(tags_data).split(",") if tag.strip()]
                 
@@ -633,13 +637,17 @@ def preview_export_items(db, limit=None, offset=0, filter_status=None, filter_fa
             if tags_data:
                 try:
                     if tags_data.startswith('{'):
-                        # JSON format: {"tag1": {"tag": "tag1"}, "tag2": {"tag": "tag2"}}
+                        # JSON format from Pocket API: {"programming": {"tag": "programming", "item_id": "131375573"}, ...}
                         tags_obj = json.loads(tags_data)
-                        tag_names = list(tags_obj.keys())
+                        # Extract tag names from the nested structure
+                        tag_names = [tag_info.get("tag", tag_key) for tag_key, tag_info in tags_obj.items() if isinstance(tag_info, dict)]
+                        # Fallback to keys if tag field not found
+                        if not tag_names:
+                            tag_names = list(tags_obj.keys())
                     else:
-                        # Comma-separated format
+                        # Comma-separated format (fallback)
                         tag_names = [tag.strip() for tag in tags_data.split(",") if tag.strip()]
-                except (json.JSONDecodeError, AttributeError):
+                except (json.JSONDecodeError, AttributeError, TypeError):
                     # Fallback to comma-separated
                     tag_names = [tag.strip() for tag in str(tags_data).split(",") if tag.strip()]
             
