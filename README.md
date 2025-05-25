@@ -42,3 +42,50 @@ You can force it to fetch everything from the beginning again using `--all`. Use
 ## Using with Datasette
 
 The SQLite database produced by this tool is designed to be browsed using [Datasette](https://datasette.readthedocs.io/). Use the [datasette-render-timestamps](https://github.com/simonw/datasette-render-timestamps) plugin to improve the display of the timestamp values.
+
+## Exporting Data
+
+The `export` command allows you to export data from your Pocket SQLite database to various formats.
+
+**Arguments:**
+
+*   `DB_PATH`: Path to your SQLite database file (e.g., `pocket.db`). This argument is required.
+*   `OUTPUT_PATH`: Path where the exported file will be saved. This argument is required.
+
+**Options:**
+
+*   `--format FORMAT`: Specifies the export format.
+    *   Available formats: `csv`, `karakeep` (exports as JSON, placeholder for Karakeep API).
+    *   Default: `csv`.
+    *   The format name is case-insensitive.
+*   `--table TABLE_NAME`: Specifies the name of the table to export.
+    *   Default: `items`.
+
+**Usage Examples:**
+
+1.  **Export the `items` table to a CSV file (default behavior):**
+    ```bash
+    pocket-to-sqlite export pocket.db items_export.csv
+    ```
+
+2.  **Export the `items` table to a CSV file (explicitly specifying format):**
+    ```bash
+    pocket-to-sqlite export pocket.db items_export.csv --format csv
+    ```
+
+3.  **Export a custom table (e.g., `tags`) to a CSV file:**
+    ```bash
+    pocket-to-sqlite export pocket.db tags_export.csv --table tags
+    ```
+
+4.  **Export the `items` table to a Karakeep (JSON) file:**
+    ```bash
+    pocket-to-sqlite export pocket.db items_export.json --format karakeep
+    ```
+
+5.  **Export a custom table (e.g., `another_table`) to Karakeep (JSON):**
+    ```bash
+    pocket-to-sqlite export pocket.db another_table_export.json --format karakeep --table another_table
+    ```
+This command provides flexibility in accessing your Pocket data outside of the SQLite database.
+The Karakeep format currently produces a JSON file; future updates might integrate directly with the Karakeep API.
