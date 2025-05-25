@@ -4,6 +4,7 @@ import json
 import time
 import logging
 import hashlib
+import uuid
 from sqlite_utils.db import AlterError, ForeignKey
 from requests.exceptions import RequestException, Timeout, HTTPError
 
@@ -185,8 +186,9 @@ class KarakeepClient:
         self.auth = auth
         self.sleep = sleep
         self.retry_sleep = retry_sleep
-        self.base_url = auth.get("karakeep_base_url", "https://localhost:3000")
+        self.base_url = auth.get("karakeep_base_url", "https://try.karakeep.app")
         self.token = auth["karakeep_token"]
+        self._tags_cache = None
         
     def create_bookmark(self, title, summary, url):
         """
@@ -275,6 +277,110 @@ class KarakeepClient:
                     raise Exception(f"Karakeep API request failed after 5 retries: {e}")
         
         raise Exception(f"Karakeep API request failed after 5 retries")
+    
+    def get_all_tags(self):
+        """
+        Fetch all tags from Karakeep.
+        
+        Returns:
+            Dict with tag names as keys and tag data as values
+            
+        Raises:
+            Exception: If API call fails
+        """
+        if self._tags_cache is not None:
+            return self._tags_cache
+            
+        headers = {
+            'Accept': 'application/json',
+            'Authorization': f'Bearer {self.token}'
+        }
+        
+        try:
+            logging.debug("Fetching all tags from Karakeep")
+            response = requests.get(
+                f"{self.base_url}/api/v1/tags",
+                headers=headers,
+                timeout=30
+            )
+            
+            response.raise_for_status()
+            data = response.json()
+            
+            # Convert to dict with tag names as keys for easy lookup
+            self._tags_cache = {tag["name"]: tag for tag in data.get("tags", [])}
+            logging.debug(f"Fetched {len(self._tags_cache)} tags from Karakeep")
+            
+            return self._tags_cache
+            
+        except Exception as e:
+            raise Exception(f"Failed to fetch tags from Karakeep: {e}")
+    
+    def add_tags_to_bookmark(self, bookmark_id, tag_names):
+        """
+        Add tags to a bookmark in Karakeep.
+        
+        Args:
+            bookmark_id: The ID of the bookmark to tag
+            tag_names: List of tag names to add
+            
+        Returns:
+            Response data from Karakeep API
+            
+        Raises:
+            Exception: If API call fails
+        """
+        if not tag_names:
+            return {"attached": []}
+            
+        # Get existing tags to check which ones already exist
+        existing_tags = self.get_all_tags()
+        
+        # Prepare tags payload
+        tags_payload = []
+        for tag_name in tag_names:
+            if tag_name in existing_tags:
+                # Use existing tag
+                tag_data = existing_tags[tag_name]
+                tags_payload.append({
+                    "tagId": tag_data["id"],
+                    "tagName": tag_data["name"]
+                })
+            else:
+                # Create new tag with random ID
+                tag_id = str(uuid.uuid4()).replace("-", "")[:16]  # 16 char random ID
+                tags_payload.append({
+                    "tagId": tag_id,
+                    "tagName": tag_name
+                })
+                # Add to cache so subsequent uses in same session will find it
+                existing_tags[tag_name] = {"id": tag_id, "name": tag_name}
+        
+        payload = {"tags": tags_payload}
+        
+        headers = {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+            'Authorization': f'Bearer {self.token}'
+        }
+        
+        try:
+            logging.debug(f"Adding {len(tags_payload)} tags to bookmark {bookmark_id}")
+            response = requests.post(
+                f"{self.base_url}/api/v1/bookmarks/{bookmark_id}/tags",
+                json=payload,
+                headers=headers,
+                timeout=30
+            )
+            
+            response.raise_for_status()
+            result = response.json()
+            
+            logging.debug(f"Successfully added tags to bookmark {bookmark_id}: {result.get('attached', [])}")
+            return result
+            
+        except Exception as e:
+            raise Exception(f"Failed to add tags to bookmark {bookmark_id}: {e}")
 
 
 def export_items_to_karakeep(db, auth, limit=None, offset=0, filter_status=None, filter_favorite=False):
@@ -294,6 +400,13 @@ def export_items_to_karakeep(db, auth, limit=None, offset=0, filter_status=None,
     """
     client = KarakeepClient(auth)
     
+    # Pre-fetch tags from Karakeep to enable tag matching
+    try:
+        client.get_all_tags()
+        logging.debug("Successfully pre-fetched tags from Karakeep")
+    except Exception as e:
+        logging.warning(f"Failed to pre-fetch tags from Karakeep: {e}")
+    
     # Build query conditions
     conditions = []
     params = []
@@ -307,14 +420,41 @@ def export_items_to_karakeep(db, auth, limit=None, offset=0, filter_status=None,
     
     where_clause = " WHERE " + " AND ".join(conditions) if conditions else ""
     
-    # Build SQL query
-    sql = f"""
-        SELECT item_id, resolved_title, given_title, resolved_url, given_url, excerpt
-        FROM items
-        {where_clause}
-        ORDER BY item_id
-        LIMIT ? OFFSET ?
-    """
+    # Check if tags column exists 
+    columns = [col[1] for col in db.execute("PRAGMA table_info(items)")]
+    has_tags_column = "tags" in columns
+    
+    # Build query with or without tags column
+    if has_tags_column:
+        sql = f"""
+            SELECT 
+                item_id, 
+                resolved_title, 
+                given_title, 
+                resolved_url, 
+                given_url, 
+                excerpt,
+                tags
+            FROM items
+            {where_clause}
+            ORDER BY item_id
+            LIMIT ? OFFSET ?
+        """
+    else:
+        sql = f"""
+            SELECT 
+                item_id, 
+                resolved_title, 
+                given_title, 
+                resolved_url, 
+                given_url, 
+                excerpt,
+                NULL as tags
+            FROM items
+            {where_clause}
+            ORDER BY item_id
+            LIMIT ? OFFSET ?
+        """
     
     # Add limit and offset to params
     final_limit = limit if limit is not None else -1  # SQLite uses -1 for no limit
@@ -331,7 +471,7 @@ def export_items_to_karakeep(db, auth, limit=None, offset=0, filter_status=None,
         
         # Convert row to dict for easier access
         row_dict = dict(row) if hasattr(row, 'keys') else dict(zip([
-            'item_id', 'resolved_title', 'given_title', 'resolved_url', 'given_url', 'excerpt'
+            'item_id', 'resolved_title', 'given_title', 'resolved_url', 'given_url', 'excerpt', 'tags'
         ], row))
         
         # Map Pocket item to Karakeep bookmark
@@ -354,12 +494,55 @@ def export_items_to_karakeep(db, auth, limit=None, offset=0, filter_status=None,
             success_count += 1
             logging.debug(f"Successfully exported item {row_dict['item_id']}")
             
+            # Handle tags if they exist
+            tags_result = None
+            bookmark_id = result.get("id")
+            tags_data = row_dict.get("tags")
+            
+            logging.debug(f"Item {row_dict['item_id']}: bookmark_id={bookmark_id}, tags_data={tags_data}")
+            
+            if bookmark_id and tags_data:
+                # Parse tags from Pocket format: {"programming": {"tag": "programming", "item_id": "131375573"}, ...}
+                tag_names = []
+                try:
+                    if tags_data.startswith('{'):
+                        # JSON format from Pocket API
+                        tags_obj = json.loads(tags_data)
+                        # Extract tag names from the nested structure
+                        tag_names = [tag_info.get("tag", tag_key) for tag_key, tag_info in tags_obj.items() if isinstance(tag_info, dict)]
+                        # Fallback to keys if tag field not found
+                        if not tag_names:
+                            tag_names = list(tags_obj.keys())
+                    else:
+                        # Comma-separated format (fallback)
+                        tag_names = [tag.strip() for tag in tags_data.split(",") if tag.strip()]
+                except (json.JSONDecodeError, AttributeError, TypeError):
+                    # Fallback to comma-separated
+                    tag_names = [tag.strip() for tag in str(tags_data).split(",") if tag.strip()]
+                
+                logging.debug(f"Item {row_dict['item_id']}: parsed {len(tag_names)} tags: {tag_names}")
+                
+                if tag_names:
+                    try:
+                        tags_result = client.add_tags_to_bookmark(bookmark_id, tag_names)
+                        logging.debug(f"Successfully added {len(tag_names)} tags to bookmark {bookmark_id}")
+                    except Exception as e:
+                        logging.warning(f"Failed to add tags to bookmark {bookmark_id}: {e}")
+                else:
+                    logging.debug(f"Item {row_dict['item_id']}: no valid tags found after parsing")
+            else:
+                if not bookmark_id:
+                    logging.debug(f"Item {row_dict['item_id']}: no bookmark_id from Karakeep response")
+                if not tags_data:
+                    logging.debug(f"Item {row_dict['item_id']}: no tags data in database")
+            
             yield {
                 "item_id": row_dict["item_id"],
                 "status": "success",
                 "title": title,
                 "url": url,
-                "karakeep_response": result
+                "karakeep_response": result,
+                "tags_response": tags_result
             }
             
         except Exception as e:
@@ -402,14 +585,41 @@ def preview_export_items(db, limit=None, offset=0, filter_status=None, filter_fa
     
     where_clause = " WHERE " + " AND ".join(conditions) if conditions else ""
     
-    # Build SQL query
-    sql = f"""
-        SELECT item_id, resolved_title, given_title, resolved_url, given_url, excerpt
-        FROM items
-        {where_clause}
-        ORDER BY item_id
-        LIMIT ? OFFSET ?
-    """
+    # Check if tags column exists 
+    columns = [col[1] for col in db.execute("PRAGMA table_info(items)")]
+    has_tags_column = "tags" in columns
+    
+    # Build query with or without tags column
+    if has_tags_column:
+        sql = f"""
+            SELECT 
+                item_id, 
+                resolved_title, 
+                given_title, 
+                resolved_url, 
+                given_url, 
+                excerpt,
+                tags
+            FROM items
+            {where_clause}
+            ORDER BY item_id
+            LIMIT ? OFFSET ?
+        """
+    else:
+        sql = f"""
+            SELECT 
+                item_id, 
+                resolved_title, 
+                given_title, 
+                resolved_url, 
+                given_url, 
+                excerpt,
+                NULL as tags
+            FROM items
+            {where_clause}
+            ORDER BY item_id
+            LIMIT ? OFFSET ?
+        """
     
     # Add limit and offset to params
     final_limit = limit if limit is not None else -1  # SQLite uses -1 for no limit
@@ -418,7 +628,7 @@ def preview_export_items(db, limit=None, offset=0, filter_status=None, filter_fa
     for row in db.execute(sql, params):
         # Convert row to dict for easier access
         row_dict = dict(row) if hasattr(row, 'keys') else dict(zip([
-            'item_id', 'resolved_title', 'given_title', 'resolved_url', 'given_url', 'excerpt'
+            'item_id', 'resolved_title', 'given_title', 'resolved_url', 'given_url', 'excerpt', 'tags'
         ], row))
         
         # Map Pocket item to Karakeep bookmark
@@ -433,9 +643,29 @@ def preview_export_items(db, limit=None, offset=0, filter_status=None, filter_fa
                 "reason": "no_url"
             }
         else:
+            tags_data = row_dict.get("tags")
+            tag_names = []
+            if tags_data:
+                try:
+                    if tags_data.startswith('{'):
+                        # JSON format from Pocket API: {"programming": {"tag": "programming", "item_id": "131375573"}, ...}
+                        tags_obj = json.loads(tags_data)
+                        # Extract tag names from the nested structure
+                        tag_names = [tag_info.get("tag", tag_key) for tag_key, tag_info in tags_obj.items() if isinstance(tag_info, dict)]
+                        # Fallback to keys if tag field not found
+                        if not tag_names:
+                            tag_names = list(tags_obj.keys())
+                    else:
+                        # Comma-separated format (fallback)
+                        tag_names = [tag.strip() for tag in tags_data.split(",") if tag.strip()]
+                except (json.JSONDecodeError, AttributeError, TypeError):
+                    # Fallback to comma-separated
+                    tag_names = [tag.strip() for tag in str(tags_data).split(",") if tag.strip()]
+            
             yield {
                 "item_id": row_dict["item_id"],
                 "status": "preview",
                 "title": title,
-                "url": url
+                "url": url,
+                "tags": tag_names
             }
