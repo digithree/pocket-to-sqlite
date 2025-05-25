@@ -499,6 +499,8 @@ def export_items_to_karakeep(db, auth, limit=None, offset=0, filter_status=None,
             bookmark_id = result.get("id")
             tags_data = row_dict.get("tags")
             
+            logging.debug(f"Item {row_dict['item_id']}: bookmark_id={bookmark_id}, tags_data={tags_data}")
+            
             if bookmark_id and tags_data:
                 # Parse tags from Pocket format: {"programming": {"tag": "programming", "item_id": "131375573"}, ...}
                 tag_names = []
@@ -518,12 +520,21 @@ def export_items_to_karakeep(db, auth, limit=None, offset=0, filter_status=None,
                     # Fallback to comma-separated
                     tag_names = [tag.strip() for tag in str(tags_data).split(",") if tag.strip()]
                 
+                logging.debug(f"Item {row_dict['item_id']}: parsed {len(tag_names)} tags: {tag_names}")
+                
                 if tag_names:
                     try:
                         tags_result = client.add_tags_to_bookmark(bookmark_id, tag_names)
                         logging.debug(f"Successfully added {len(tag_names)} tags to bookmark {bookmark_id}")
                     except Exception as e:
                         logging.warning(f"Failed to add tags to bookmark {bookmark_id}: {e}")
+                else:
+                    logging.debug(f"Item {row_dict['item_id']}: no valid tags found after parsing")
+            else:
+                if not bookmark_id:
+                    logging.debug(f"Item {row_dict['item_id']}: no bookmark_id from Karakeep response")
+                if not tags_data:
+                    logging.debug(f"Item {row_dict['item_id']}: no tags data in database")
             
             yield {
                 "item_id": row_dict["item_id"],
