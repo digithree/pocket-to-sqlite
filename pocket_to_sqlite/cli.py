@@ -95,7 +95,7 @@ def fetch(db_path, auth, all, silent, debug):
     # For incremental fetch, start from the number of items already in DB
     start_offset = 0
     if not all and "items" in db.table_names():
-        start_offset = db["items"].count
+        start_offset = db["items"].count()
         if debug:
             print(f"Found {start_offset} existing items, starting from offset {start_offset}")
     
