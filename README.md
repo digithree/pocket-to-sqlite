@@ -1,9 +1,12 @@
 # pocket-to-sqlite
 
-[![PyPI](https://img.shields.io/pypi/v/pocket-to-sqlite.svg)](https://pypi.org/project/pocket-to-sqlite/)
-[![Changelog](https://img.shields.io/github/v/release/dogsheep/pocket-to-sqlite?include_prereleases&label=changelog)](https://github.com/dogsheep/pocket-to-sqlite/releases)
-[![Tests](https://github.com/dogsheep/pocket-to-sqlite/workflows/Test/badge.svg)](https://github.com/dogsheep/pocket-to-sqlite/actions?query=workflow%3ATest)
-[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](https://github.com/dogsheep/pocket-to-sqlite/blob/main/LICENSE)
+⚠️ ARCHIVED
+
+In 2025, Mozilla shut down Pocket after [aquiring them in 2017](https://blog.mozilla.org/en/mozilla/news/mozilla-acquires-pocket/). This followed a sunsetting process that began in May and finished in November 2025 (see [their support article](https://support.mozilla.org/en-US/kb/future-of-pocket)). Since November you can no longer export your Pocket data so this repository is no longer useful. I keep it here as archived just in case anyone as backups they want to make use of.
+
+This fork fixes the original project which was abandoned, but I will no longer be maintaining it either due to the above.
+
+---
 
 Create a SQLite database containing data from your [Pocket](https://getpocket.com/) account.
 
